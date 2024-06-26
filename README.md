@@ -1,5 +1,7 @@
 ### Script that processes HL7 data from JSON files stored in S3 buckets or RedisJSON and stores the transformed/processed data in PostgreSQL schema.
 
+[See LinkedIn Post](https://www.linkedin.com/posts/activity-7109285980343336960-1IGn)
+
 ### Requires:
         Use create_sample_data.py to generate anonymized sample data
 
