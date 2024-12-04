@@ -1,4 +1,5 @@
-### Script that processes HL7 data from JSON files stored in S3 buckets or RedisJSON and stores the transformed/processed data in PostgreSQL schema.
+### ETL Script processes HL7 data from JSON files in S3 buckets or RedisJSON and stores the transformed data in PostgreSQL schema.
+
 
 [See LinkedIn Post](https://www.linkedin.com/posts/activity-7109285980343336960-1IGn)
 
@@ -170,7 +171,7 @@ Sample RedisJSON Key Content:
 
 ### Phase 1 Workflow
 To catch up with over one billion rows (equivalent to three years' worth of raw data) in a MySQL 
-Database and to facilitate the ingestion and processing of a large number of JSON files, I 
+database and to facilitate the ingestion and processing of a large number of JSON files, I 
 converted the rows into JSON files and stored each file in an S3 bucket as well as in the 
 RedisJSON document store. The S3 bucket serves as permanent storage, while RedisJSON, due to its 
 significantly faster read capabilities, was utilized for reading and processing tens of 
@@ -179,12 +180,86 @@ with over one billion rows, the reads, when comparing Python Boto3 with Python R
 were exceptionally fast (`.8` second for `Boto3`, vs `.007` seconds for `PyRedis` for a `3kb` file). 
 The read size was only limited by the available RAM of the EC2 instance.
 
+```mermaid
+%%{init: {'theme': 'forest', "loglevel":1,'themeVariables': {'lineColor': 'Black'}}}%%
+flowchart TD;
+    subgraph "Phase 1"
+        A["ADT Feed"] -. "Metadata + Raw HL7 
+        Binary BLOB" .-> id1[("MySQL
+        1+ Billion Rows")];
+        subgraph "One time catch-up"
+            id1 .-> G["Catch Up Python ETL"];
+            G["Catch Up 
+            Python ETL"] -. "Metadata + Raw HL7
+            Binary BLOB" .-> M["JSON"] .-> H[("RedisJSON")] 
+            N .-> I["Map HL7 Segments
+            and fields"]
+            H .-> N["Python ETL"]
+            N .-> J["Metadata"]
+            I .-> K["PySpark Dataframe"]
+            J .-> K
+        end
+        K .-> F
+        A -- "JSON
+        (Metadata+RAW HL7)" --> id2[(S3://YYYY/MM/DD)];
+        subgraph "Nightly"
+            id2 --> B["ETL"];
+            B["Nightly Python ETL"] -- JSON --> C["Map HL7 Segments 
+            and fields"];
+            B["Nightly Python ETL"] -- JSON --> D["Metadata"];
+            C --> E
+            D --> E["PySpark Dataframe"]
+        end
+        E --> F[("PostgreSQL")]
+        F --> L["New Patient 
+        Referral List
+        Dashboard"]
+    end
+```
 
-![To make sense of data that has sat there for years](etl-phase1.png)
+### Final Implementation
 
-### Ideal Implementation
+After catching up by processing over a Billion rows of existing data, the final implementation processes ADT feed messages as they come in - taking mere seconds or less to update existing patient data
 
-Since this has been my very first experience with processing HL7 data from ADT feeds, now that I have 
-learned quite a lot, my final implementation would look something like this.
+```mermaid
+%%{init: {'theme': 'forest', "loglevel":1,'themeVariables': {'lineColor': 'Blue'}}}%%
 
-![Final Implementation](final-phase.png)
+graph TB
+        style ADTETL fill:#4433,stroke:#13821a,stroke-width:4px
+        style MIRTH fill:#1433,stroke:#13821a,stroke-width:4px
+        classDef subgraph_padding fill:none,stroke:none
+
+        subgraph ADTETL["`**ADT ETL --> Data Lakehouse**`"]
+            subgraph blank[ ]
+
+            subgraph MIRTH["`**Mirth Connect**`"]
+                A["ADT Feeds"]
+            end
+            A -- "JSON
+            (Metadata
+            RAW HL7)" --> id2[("`**S3**://YYYY/MM/DD`")];
+            id2 --S3 Event 
+            Notification--> sns["AWS SNS
+            Topic"]
+            sns --"Publish 
+            Message"--> sqs["AWS SQS"]
+            sqs -- Publish
+            Message --> E["EventBridge"]
+            E --"Trigger Event"--> py["Python ETL
+            Sidecar"]
+            py --"Patient Data 
+            Archive (JSON)"--> s3["AWS S3"]
+        sqs --"Failed 
+        Messages"--> dlq["AWS SQS
+            DLQ"]
+            py  --> REDIS["RedisJSON 
+            Cache"] --> F["PySpark
+            Dataframe"]
+            F --"Filtered 
+            Patient Data"--> G[("PostgreSQL")]
+            py --"Error
+            Handling"--> dlq
+        end
+        end
+class blank subgraph_padding
+```
